@@ -6,11 +6,15 @@ export gffnwnt
 import os, streams, docopt, strutils, parsecfg
 import neverwinter/gff
 
-const GffExtensions* = @[
+const
+  GffExtensions* = @[
   "utc", "utd", "ute", "uti", "utm", "utp", "uts", "utt", "utw",
   "git", "are", "gic", "mod", "ifo", "fac", "dlg", "itp", "bic",
-  "jrl", "gff", "gui"
-]
+  "jrl", "gff", "gui" ]
+  SupportedFormats = GffExtensions & @["nwnt"] 
+
+proc getFileFormat(file: string): string =
+  file.splitFile.ext.strip(leading = true, trailing = false, {'.'})
 
 when isMainModule:
   let args = docopt"""
@@ -19,13 +23,15 @@ when isMainModule:
   Supports input of either .nwnt or .gff data, and outputs the other.
 
   Usage:
-    nwnt <inputfile> [options]
+    nwnt [options]
     nwnt -h | --help
     nwnt --version
 
   Options:
-    -o FILE     optional path to the output file (without extension)
-                Will default to input directory
+    -i FILE     Path to input file (required)
+    -o FILE     Path to output file. This parameter is optional; if not set, it
+                will default to the input file's path, adding ".nwnt" if it is a
+                GFF file or removing it if not.
 
     -p places   float precision for nwnt output [default: 4]
 
@@ -45,33 +51,40 @@ when isMainModule:
     echo versionString
     quit(0)
 
+  if not args["-i"]:
+    quit("Error: input file required")
 
+  let
+    inFile = $args["-i"]
+    inFormat = inFile.getFileFormat
+    outFile =
+      if args["-o"]:
+        let outFile = $args["-o"]
+        if outFile.getFileFormat notin SupportedFormats:
+          quit("Error: output file format not supported")
+        outFile
+      elif inFormat in GffExtensions:
+        inFile & ".nwnt"
+      elif inFormat == "nwnt":
+        inFile[0..^4]
+      else:
+        quit("Error: input file format not supported")
+  try:
+    let
+      input = openFileStream(inFile)
+      output = openFileStream(outFile, fmWrite)
 
-  let inputfile = $args["<inputfile>"]
-  let informat = inputfile.splitFile.ext[1..^1]
-  var outputfile  = $args["-o"]
-  if outputfile == "nil":
-    outputfile = inputfile #extension added later so these aren't identical
+    var state: GffRoot
 
-  var state: GffRoot
+    if informat in GffExtensions:
+      let floatPrecision = parseInt($args["-p"])
+      state = input.readGffRoot(false)
+      output.toNwnt(state, floatPrecision)
+    elif informat == "nwnt":
+      state = input.gffRootFromNwnt()
+      output.write(state)
 
-  if informat in GffExtensions:
-    outputfile.add(".nwnt")
-
-    let floatPrecision = parseInt($args["-p"])
-    let input  = openFileStream(inputfile)
-    let output = openFileStream(outputfile, fmWrite)
-    state = input.readGffRoot(false)
-    output.toNwnt(state, floatPrecision)
-
-  elif informat == "nwnt":
-    if(outputfile[^5..^1] == ".nwnt"):
-      outputfile = outputfile.splitFile.dir & outputfile.splitFile.name
-
-    let input  = openFileStream(inputfile)
-    let output = openFileStream(outputfile, fmWrite)
-    state = input.gffRootFromNwnt()
-    output.write(state)
-
-  else:
-    quit("This is not a supported format")
+    input.close
+    output.close
+  except IOError as e:
+    quit("Error: " & e.msg)
